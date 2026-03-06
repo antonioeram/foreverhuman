@@ -1,0 +1,110 @@
+version: "3.9"
+
+# =============================================================================
+# foreverhuman.health — Stack Dezvoltare (fără nginx/certbot/n8n)
+#
+# Usage:
+#   cp .env.clinic.example .env
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml logs -f api
+#
+# API disponibil la: http://10.0.10.105:8000
+# Docs Swagger:      http://10.0.10.105:8000/docs
+# =============================================================================
+
+networks:
+  dev:
+    driver: bridge
+
+volumes:
+  postgres_dev_data:
+  lancedb_dev_data:
+  redis_dev_data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Database — PostgreSQL 16 (schema aplicată automat la start)
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-foreverhuman}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB:       ${POSTGRES_DB:-foreverhuman}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ../platform/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../platform/db/seed_dev.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foreverhuman} -d ${POSTGRES_DB:-foreverhuman}"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  # ---------------------------------------------------------------------------
+  # Redis — Cache + Job Queue
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # API — FastAPI (build local)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ../platform/api
+      dockerfile: Dockerfile
+      args:
+        BUILD_ENV: dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL:       postgresql+asyncpg://${POSTGRES_USER:-foreverhuman}:${POSTGRES_PASSWORD:-devpassword}@db:5432/${POSTGRES_DB:-foreverhuman}
+      REDIS_URL:          redis://redis:6379/0
+      LANCEDB_PATH:       /data/lancedb
+      SECRET_KEY:         ${SECRET_KEY:-dev-secret-key-change-in-prod-32chars}
+      CLINIC_ID:          ${CLINIC_ID:-00000000-0000-0000-0000-000000000001}
+      ENVIRONMENT:        development
+      LOG_LEVEL:          debug
+      DOMAIN:             localhost
+      LLM_PROVIDER:       ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY:  ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY:     ${OPENAI_API_KEY:-}
+      OLLAMA_URL:         ${OLLAMA_URL:-}
+      ALLOWED_ORIGINS:    '["http://localhost:3000","http://localhost:19006","http://10.0.10.105:8000"]'
+    volumes:
+      - lancedb_dev_data:/data/lancedb
+    ports:
+      - "8000:8000"
+    networks:
+      - dev
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

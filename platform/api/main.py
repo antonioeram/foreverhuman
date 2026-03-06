@@ -9,16 +9,19 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from core.config import settings
 from core.database import engine, Base
+
+# Import models so Base.metadata is populated
+import models.public  # noqa: F401
+
 from routers import auth, patients, doctors, analyses, chat, sensors, directives
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup & shutdown logic."""
-    # Startup
-    async with engine.begin() as conn:
-        # Alembic gestionează migrările în prod; auto-create doar în dev
-        if settings.ENVIRONMENT == "development":
+    # Startup: în dev creăm tabelele dacă nu există
+    if settings.ENVIRONMENT == "development":
+        async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
     yield
     # Shutdown
@@ -41,12 +44,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
 if settings.ENVIRONMENT == "production":
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[settings.DOMAIN, f"*.{settings.DOMAIN}"])
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[settings.DOMAIN, f"*.{settings.DOMAIN}"],
+    )
 
 # ---------------------------------------------------------------------------
 # Routers
@@ -65,4 +71,9 @@ app.include_router(directives.router, prefix="/api/v1/directives", tags=["direct
 # ---------------------------------------------------------------------------
 @app.get("/health", tags=["system"])
 async def health():
-    return {"status": "ok", "version": "0.1.0", "clinic_id": settings.CLINIC_ID}
+    return {
+        "status":    "ok",
+        "version":   "0.1.0",
+        "clinic_id": settings.CLINIC_ID,
+        "env":       settings.ENVIRONMENT,
+    }

@@ -1,8 +1,12 @@
 FROM python:3.12-slim
 
+# BUILD_ENV=dev → requirements.min.txt (rapid, fără ML deps)
+# BUILD_ENV=prod → requirements.txt (complet)
+ARG BUILD_ENV=dev
+
 WORKDIR /app
 
-# Dependențe sistem (pentru pdfplumber, docling)
+# Dependențe sistem
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -10,8 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements.min.txt ./
+RUN if [ "$BUILD_ENV" = "prod" ]; then \
+        pip install --no-cache-dir -r requirements.txt; \
+    else \
+        pip install --no-cache-dir -r requirements.min.txt; \
+    fi
 
 # Cod aplicație
 COPY . .

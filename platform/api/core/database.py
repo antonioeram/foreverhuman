@@ -40,7 +40,8 @@ async def get_db() -> AsyncSession:
 
 async def set_clinic_context(session: AsyncSession, clinic_id: str) -> None:
     """Setează variabila de sesiune pentru RLS PostgreSQL."""
+    from sqlalchemy import text
     await session.execute(
-        "SELECT set_config('app.current_clinic_id', :clinic_id, true)",
-        {"clinic_id": clinic_id}
+        text("SELECT set_config('app.current_clinic_id', :clinic_id, true)"),
+        {"clinic_id": clinic_id},
     )
