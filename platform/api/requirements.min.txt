@@ -31,3 +31,6 @@ structlog==24.4.0
 
 # Rate limiting
 slowapi==0.1.9
+
+# Form / file upload
+python-multipart==0.0.12

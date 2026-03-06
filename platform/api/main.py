@@ -7,24 +7,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
-from core.config import settings
-from core.database import engine, Base
+from sqlalchemy import text
 
-# Import models so Base.metadata is populated
-import models.public  # noqa: F401
+from core.config import settings
+from core.database import engine
 
 from routers import auth, patients, doctors, analyses, chat, sensors, directives
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup & shutdown logic."""
-    # Startup: în dev creăm tabelele dacă nu există
-    if settings.ENVIRONMENT == "development":
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    """
+    Startup: verifică conexiunea DB (schema gestionată exclusiv prin schema.sql).
+    Nu folosim create_all — avem coloane GENERATED ALWAYS AS incompatibile cu ORM.
+    """
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
     yield
-    # Shutdown
     await engine.dispose()
 
 
