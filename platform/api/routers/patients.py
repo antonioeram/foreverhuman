@@ -167,11 +167,11 @@ async def create_patient(
         },
     )
 
-    # Loghează consimțământul
+    # Loghează consimțământul (schema reală: consent_type, granted, doc_version)
     await db.execute(
         text(
-            "INSERT INTO public.consent_log (id, patient_id, action, consent_version, ip_address) "
-            "VALUES (:id, :patient_id, 'GIVEN', :version, 'system')"
+            "INSERT INTO public.consent_log (id, patient_id, consent_type, granted, doc_version, ip_address) "
+            "VALUES (:id, :patient_id, 'data_processing', true, :version, '127.0.0.1')"
         ),
         {"id": str(uuid4()), "patient_id": new_id, "version": body.consent_version},
     )
