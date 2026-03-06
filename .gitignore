@@ -1,0 +1,53 @@
+# ============ Secrets — NICIODATĂ în git ============
+.env
+.env.*
+!.env.*.example
+*.key
+*.pem
+*.p12
+
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+
+# ============ Node / React Native ============
+node_modules/
+.expo/
+dist/
+build/
+*.tgz
+.metro-cache/
+
+# ============ Baze de date / Date locale ============
+*.db
+*.sqlite
+*.sqlite3
+/platform/mobile/src/data/local/
+
+# ============ LanceDB local (dev) ============
+/data/lancedb/
+
+# ============ Logs ============
+*.log
+logs/
+
+# ============ IDE ============
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ============ OS ============
+.DS_Store
+Thumbs.db
+
+# ============ Alembic (generat) ============
+/platform/db/migrations/versions/*.py
+# (păstrează versiunile în git — comentează linia de sus dacă vrei tracking migrări)

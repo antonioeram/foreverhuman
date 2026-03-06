@@ -1,0 +1,185 @@
+version: "3.9"
+
+# =============================================================================
+# foreverhuman.health — Stack Knowledge Base (server central)
+# Un singur server KB pentru toate clinicile.
+# Conține ZERO date pacienți — doar articole, embeddings, outcome vectors anonimizate.
+#
+# Usage:
+#   cp .env.kb.example .env.kb
+#   docker compose -f docker-compose.kb.yml --env-file .env.kb up -d
+# =============================================================================
+
+networks:
+  kb-internal:
+    driver: bridge
+    internal: true
+  kb-proxy:
+    driver: bridge
+
+volumes:
+  kb_postgres_data:
+  kb_lancedb_data:
+  kb_n8n_data:
+  kb_redis_data:
+  kb_nginx_certs:
+  kb_nginx_html:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # KB API — FastAPI read-only (+ admin endpoints pentru ingestori)
+  # ---------------------------------------------------------------------------
+  kb-api:
+    image: foreverhuman/kb-api:${KB_API_VERSION:-latest}
+    build:
+      context: ../knowledge-base/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${KB_POSTGRES_USER}:${KB_POSTGRES_PASSWORD}@kb-db:5432/${KB_POSTGRES_DB}
+      REDIS_URL: redis://kb-redis:6379/0
+      LANCEDB_PATH: /data/lancedb
+      SECRET_KEY: ${KB_SECRET_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}       # pentru embeddings (fallback: ollama)
+      OLLAMA_URL: ${KB_OLLAMA_URL:-}
+      EMBEDDING_PROVIDER: ${KB_EMBEDDING_PROVIDER:-openai}
+      ADMIN_API_KEY: ${KB_ADMIN_API_KEY}         # pentru ingestori interni
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - kb_lancedb_data:/data/lancedb
+    networks:
+      - kb-internal
+    depends_on:
+      kb-db:
+        condition: service_healthy
+      kb-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # KB Database — PostgreSQL (articole, metadate, outcome vectors)
+  # ---------------------------------------------------------------------------
+  kb-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${KB_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${KB_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${KB_POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - kb_postgres_data:/var/lib/postgresql/data
+      - ../knowledge-base/db/schema.sql:/docker-entrypoint-initdb.d/01-kb-schema.sql:ro
+    networks:
+      - kb-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_POSTGRES_USER} -d ${KB_POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # KB LanceDB — Embeddings articole + outcome vectors
+  # ---------------------------------------------------------------------------
+  kb-lancedb:
+    image: lancedb/lancedb:latest
+    restart: unless-stopped
+    environment:
+      LANCEDB_DATA_PATH: /data
+    volumes:
+      - kb_lancedb_data:/data
+    networks:
+      - kb-internal
+
+  # ---------------------------------------------------------------------------
+  # KB n8n — Ingestori automatizați
+  # Pipelines: PubMed (zilnic), YouTube (la 6h), web scraping (zilnic), cărți (manual trigger)
+  # ---------------------------------------------------------------------------
+  kb-n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: kb-db
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${KB_POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${KB_POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${KB_POSTGRES_PASSWORD}
+      DB_POSTGRESDB_SCHEMA: n8n_kb
+      N8N_ENCRYPTION_KEY: ${KB_N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${KB_DOMAIN}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${KB_DOMAIN}/n8n/
+      # API keys ingestori
+      PUBMED_API_KEY: ${PUBMED_API_KEY:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}   # pentru summarization articole
+      # Endpoint KB API pentru ingestie
+      KB_API_URL: http://kb-api:8000
+      KB_ADMIN_API_KEY: ${KB_ADMIN_API_KEY}
+      REDIS_URL: redis://kb-redis:6379/1
+    volumes:
+      - kb_n8n_data:/home/node/.n8n
+      - ../knowledge-base/ingestors:/ingestors:ro
+    networks:
+      - kb-internal
+    depends_on:
+      kb-db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # KB Redis — Job queue pentru ingestie asincronă
+  # ---------------------------------------------------------------------------
+  kb-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - kb_redis_data:/data
+    networks:
+      - kb-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Nginx — Reverse proxy KB (HTTPS, rate limiting strict)
+  # ---------------------------------------------------------------------------
+  kb-nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/kb.conf:/etc/nginx/conf.d/default.conf:ro
+      - kb_nginx_certs:/etc/letsencrypt
+      - kb_nginx_html:/usr/share/nginx/html
+    networks:
+      - kb-internal
+      - kb-proxy
+    depends_on:
+      - kb-api
+
+  # ---------------------------------------------------------------------------
+  # Certbot — SSL KB domain
+  # ---------------------------------------------------------------------------
+  kb-certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - kb_nginx_certs:/etc/letsencrypt
+      - kb_nginx_html:/usr/share/nginx/html
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /usr/share/nginx/html; sleep 12h & wait $${!}; done"
+    networks:
+      - kb-proxy

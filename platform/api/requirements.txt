@@ -1,0 +1,44 @@
+# Core
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.8.2
+pydantic-settings==2.4.0
+
+# Database
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+alembic==1.13.2
+
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Redis
+redis[asyncio]==5.0.8
+
+# LangGraph + Mem0
+langgraph==0.2.28
+langchain-anthropic==0.2.0
+langchain-openai==0.2.0
+mem0ai==0.1.16
+
+# LanceDB
+lancedb==0.12.0
+
+# Document processing
+pdfplumber==0.11.4
+docling==2.5.0
+
+# HTTP client
+httpx==0.27.2
+
+# Rate limiting
+slowapi==0.1.9
+
+# Logging
+structlog==24.4.0
+
+# Dev
+pytest==8.3.2
+pytest-asyncio==0.24.0
+httpx==0.27.2   # pentru TestClient async
