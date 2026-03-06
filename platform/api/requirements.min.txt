@@ -34,3 +34,6 @@ slowapi==0.1.9
 
 # Form / file upload
 python-multipart==0.0.12
+
+# bcrypt 4.x incompatibil cu passlib 1.7.4 (detect_wrap_bug)
+bcrypt==3.2.2
