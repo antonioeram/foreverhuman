@@ -176,7 +176,7 @@ async def create_patient(
         {"id": str(uuid4()), "patient_id": new_id, "version": body.consent_version},
     )
 
-    return await _get_patient_or_404(db, new_id, current_user["clinic_id"])
+    return _row_to_dict(await _get_patient_or_404(db, new_id, current_user["clinic_id"]))
 
 
 @router.get("/{patient_id}")
@@ -242,7 +242,7 @@ async def update_patient(
         updates,
     )
 
-    return await _get_patient_or_404(db, str(patient_id), current_user["clinic_id"])
+    return _row_to_dict(await _get_patient_or_404(db, str(patient_id), current_user["clinic_id"]))
 
 
 @router.get("/{patient_id}/export")
