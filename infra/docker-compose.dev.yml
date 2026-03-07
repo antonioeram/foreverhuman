@@ -86,12 +86,13 @@ services:
       ENVIRONMENT:        development
       LOG_LEVEL:          debug
       DOMAIN:             localhost
-      LLM_PROVIDER:       ${LLM_PROVIDER:-gemini}
+      LLM_PROVIDER:       ${LLM_PROVIDER:-ollama}
+      OLLAMA_URL:         ${OLLAMA_URL:-http://10.0.10.42:11434}
+      OLLAMA_MODEL:       ${OLLAMA_MODEL:-qwen3:14b}
       GEMINI_API_KEY:     ${GEMINI_API_KEY:-}
       GEMINI_MODEL:       ${GEMINI_MODEL:-gemini-3-flash-preview}
       ANTHROPIC_API_KEY:  ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY:     ${OPENAI_API_KEY:-}
-      OLLAMA_URL:         ${OLLAMA_URL:-}
       ALLOWED_ORIGINS:    '["http://localhost:3000","http://localhost:19006","http://10.0.10.105:8000"]'
     volumes:
       - lancedb_dev_data:/data/lancedb

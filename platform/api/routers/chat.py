@@ -127,6 +127,8 @@ async def _save_message(
 
 def _check_llm_available() -> None:
     """Aruncă 503 dacă niciun LLM provider nu e configurat."""
+    if settings.LLM_PROVIDER == "ollama":
+        return  # Ollama local, mereu disponibil
     if settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY:
         return
     if settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
@@ -138,26 +140,37 @@ def _check_llm_available() -> None:
 
 
 async def _call_llm(system: str, history: list[dict], user_message: str) -> str:
-    """Apel LLM unificat: Gemini sau Anthropic, în funcție de LLM_PROVIDER."""
-    if settings.LLM_PROVIDER == "gemini":
+    """Apel LLM unificat: Ollama / Gemini / Anthropic."""
+    if settings.LLM_PROVIDER == "ollama":
+        import httpx
+        messages = [{"role": "system", "content": system}]
+        for m in history:
+            messages.append({"role": m["role"], "content": m["content"]})
+        messages.append({"role": "user", "content": user_message})
+        resp = httpx.post(
+            f"{settings.OLLAMA_URL}/v1/chat/completions",
+            json={"model": settings.OLLAMA_MODEL, "messages": messages, "stream": False},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+    elif settings.LLM_PROVIDER == "gemini":
         import google.generativeai as genai
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel(
             model_name=settings.GEMINI_MODEL,
             system_instruction=system,
         )
-        # Convertim history din format Anthropic în format Gemini
-        # Gemini: role "user"/"model", parts=[text]
         gemini_history = []
         for m in history:
             role = "model" if m["role"] == "assistant" else "user"
             gemini_history.append({"role": role, "parts": [m["content"]]})
-
         chat = model.start_chat(history=gemini_history)
         resp = chat.send_message(user_message)
         return resp.text.strip()
 
-    else:
+    else:  # anthropic
         import anthropic
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         messages = history + [{"role": "user", "content": user_message}]
@@ -241,7 +254,30 @@ async def send_message_stream(
 
     async def event_generator() -> AsyncIterator[str]:
         try:
-            if settings.LLM_PROVIDER == "gemini":
+            if settings.LLM_PROVIDER == "ollama":
+                import httpx
+                messages = [{"role": "system", "content": system_with_context}]
+                for m in history:
+                    messages.append({"role": m["role"], "content": m["content"]})
+                messages.append({"role": "user", "content": body.message})
+                async with httpx.AsyncClient(timeout=120) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{settings.OLLAMA_URL}/v1/chat/completions",
+                        json={"model": settings.OLLAMA_MODEL, "messages": messages, "stream": True},
+                    ) as r:
+                        async for line in r.aiter_lines():
+                            if line.startswith("data: ") and line != "data: [DONE]":
+                                try:
+                                    chunk = json.loads(line[6:])
+                                    token = chunk["choices"][0]["delta"].get("content", "")
+                                    if token:
+                                        payload = json.dumps({"token": token, "session_id": session_id})
+                                        yield f"data: {payload}\n\n"
+                                except Exception:
+                                    pass
+
+            elif settings.LLM_PROVIDER == "gemini":
                 import google.generativeai as genai
                 genai.configure(api_key=settings.GEMINI_API_KEY)
                 model = genai.GenerativeModel(

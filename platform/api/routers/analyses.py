@@ -100,7 +100,25 @@ Răspunde EXCLUSIV cu JSON array:"""
 
     raw = None
     try:
-        if settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY:
+        if settings.LLM_PROVIDER == "ollama":
+            import httpx
+            payload = {
+                "model": settings.OLLAMA_MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM},
+                    {"role": "user", "content": PROMPT},
+                ],
+                "stream": False,
+            }
+            resp = httpx.post(
+                f"{settings.OLLAMA_URL}/v1/chat/completions",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+        elif settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY:
             import google.generativeai as genai
             genai.configure(api_key=settings.GEMINI_API_KEY)
             model = genai.GenerativeModel(
