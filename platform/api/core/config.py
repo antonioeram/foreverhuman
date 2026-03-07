@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash-preview-05-20"
+    GEMINI_MODEL: str = "gemini-3-flash-preview"
     OLLAMA_URL: str = "http://ollama:11434"
     OLLAMA_MODEL: str = "llama3"
 
