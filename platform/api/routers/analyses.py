@@ -70,6 +70,16 @@ def _extract_pdf_text(content: bytes) -> str:
         raise HTTPException(status_code=422, detail=f"PDF parsing failed: {e}")
 
 
+def _extract_json_from_text(raw: str) -> list:
+    """Extrage JSON array din răspuns LLM chiar dacă are text înainte/după."""
+    import re
+    # Cauta primul [...] din text
+    match = re.search(r'\[.*\]', raw, re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+    raise ValueError("No JSON array found in response")
+
+
 async def _extract_biomarkers_with_llm(text: str, patient_id: str) -> list[dict]:
     """
     Extrage biomarkeri structurat cu LLM (Gemini sau Anthropic, configurabil).
@@ -110,11 +120,11 @@ Răspunde EXCLUSIV cu JSON array:"""
                 ],
                 "stream": False,
             }
-            resp = httpx.post(
-                f"{settings.OLLAMA_URL}/v1/chat/completions",
-                json=payload,
-                timeout=120,
-            )
+            async with httpx.AsyncClient(timeout=120) as hclient:
+                resp = await hclient.post(
+                    f"{settings.OLLAMA_URL}/v1/chat/completions",
+                    json=payload,
+                )
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
 
@@ -142,17 +152,11 @@ Răspunde EXCLUSIV cu JSON array:"""
         else:
             return []  # niciun provider configurat
 
-        # Curăță markdown fence dacă există
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-
-        extracted = json.loads(raw)
+        # Extrage JSON array chiar dacă modelul adaugă text înainte
+        extracted = _extract_json_from_text(raw)
         return extracted if isinstance(extracted, list) else []
 
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         return []
     except Exception:
         return []
@@ -258,9 +262,12 @@ async def upload_analysis(
     )
 
     msg = f"{inserted} biomarkeri extrași"
-    has_key = (settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY) or \
-              (settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY)
-    if not has_key:
+    llm_active = (
+        settings.LLM_PROVIDER == "ollama" or
+        (settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY) or
+        (settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY)
+    )
+    if not llm_active:
         msg += f" ({settings.LLM_PROVIDER} API key lipsă — extragere LLM dezactivată)"
     if out_of_range:
         msg += f", {out_of_range} în afara referinței"

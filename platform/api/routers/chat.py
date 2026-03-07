@@ -147,11 +147,11 @@ async def _call_llm(system: str, history: list[dict], user_message: str) -> str:
         for m in history:
             messages.append({"role": m["role"], "content": m["content"]})
         messages.append({"role": "user", "content": user_message})
-        resp = httpx.post(
-            f"{settings.OLLAMA_URL}/v1/chat/completions",
-            json={"model": settings.OLLAMA_MODEL, "messages": messages, "stream": False},
-            timeout=120,
-        )
+        async with httpx.AsyncClient(timeout=120) as hclient:
+            resp = await hclient.post(
+                f"{settings.OLLAMA_URL}/v1/chat/completions",
+                json={"model": settings.OLLAMA_MODEL, "messages": messages, "stream": False},
+            )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
