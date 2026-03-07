@@ -38,7 +38,8 @@ python-multipart==0.0.12
 # Document processing (analyses endpoint)
 pdfplumber==0.11.4
 
-# Anthropic (chat + biomarker extraction)
+# LLM providers (Gemini implicit pentru dev, Anthropic optional pentru prod)
+google-generativeai==0.8.3
 anthropic==0.34.2
 
 # bcrypt 4.x incompatibil cu passlib 1.7.4 (detect_wrap_bug)

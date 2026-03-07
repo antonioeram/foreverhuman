@@ -30,9 +30,11 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
 
     # LLM
-    LLM_PROVIDER: Literal["anthropic", "ollama"] = "anthropic"
+    LLM_PROVIDER: Literal["anthropic", "gemini", "ollama"] = "gemini"
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash-preview-05-20"
     OLLAMA_URL: str = "http://ollama:11434"
     OLLAMA_MODEL: str = "llama3"
 

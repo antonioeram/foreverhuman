@@ -72,24 +72,15 @@ def _extract_pdf_text(content: bytes) -> str:
 
 async def _extract_biomarkers_with_llm(text: str, patient_id: str) -> list[dict]:
     """
-    Extrage biomarkeri structurat cu Anthropic.
-    Returnează o listă de dicts conform schemei patient_{uuid}.biomarkers.
+    Extrage biomarkeri structurat cu LLM (Gemini sau Anthropic, configurabil).
     Anti-halucinare: prompt strict, output JSON verificat.
     """
-    if not settings.ANTHROPIC_API_KEY:
-        # Fără API key — returnăm lista goală (nu aruncăm eroare)
-        return []
-
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-        SYSTEM = """Ești un asistent medical specializat în extragerea structurată a datelor din analize de laborator.
+    SYSTEM = """Ești un asistent medical specializat în extragerea structurată a datelor din analize de laborator.
 Extragi EXCLUSIV date care apar explicit în text. Nu inventezi, nu estimezi, nu completezi din memorie.
 Dacă o valoare nu apare explicit, lași câmpul null.
 Răspunzi DOAR cu JSON valid, fără text adițional."""
 
-        PROMPT = f"""Extrage toți biomarkerii din această analiză de laborator și returnează un JSON array.
+    PROMPT = f"""Extrage toți biomarkerii din această analiză de laborator și returnează un JSON array.
 
 Fiecare element trebuie să aibă exact aceste câmpuri:
 - name: string (ex: "Glucoza", "Hemoglobina", "TSH")
@@ -107,16 +98,33 @@ TEXT ANALIZĂ:
 
 Răspunde EXCLUSIV cu JSON array:"""
 
-        msg = client.messages.create(
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=2048,
-            system=SYSTEM,
-            messages=[{"role": "user", "content": PROMPT}],
-        )
+    raw = None
+    try:
+        if settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY:
+            import google.generativeai as genai
+            genai.configure(api_key=settings.GEMINI_API_KEY)
+            model = genai.GenerativeModel(
+                model_name=settings.GEMINI_MODEL,
+                system_instruction=SYSTEM,
+            )
+            resp = model.generate_content(PROMPT)
+            raw = resp.text.strip()
 
-        raw = msg.content[0].text.strip()
+        elif settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
+            import anthropic
+            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            msg = client.messages.create(
+                model=settings.ANTHROPIC_MODEL,
+                max_tokens=2048,
+                system=SYSTEM,
+                messages=[{"role": "user", "content": PROMPT}],
+            )
+            raw = msg.content[0].text.strip()
 
-        # Curăță markdown dacă există
+        else:
+            return []  # niciun provider configurat
+
+        # Curăță markdown fence dacă există
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -124,15 +132,11 @@ Răspunde EXCLUSIV cu JSON array:"""
         raw = raw.strip()
 
         extracted = json.loads(raw)
-        if not isinstance(extracted, list):
-            return []
-
-        return extracted
+        return extracted if isinstance(extracted, list) else []
 
     except json.JSONDecodeError:
         return []
-    except Exception as e:
-        # Log eroarea dar nu blochează — returnăm ce s-a putut extrage
+    except Exception:
         return []
 
 
@@ -236,8 +240,10 @@ async def upload_analysis(
     )
 
     msg = f"{inserted} biomarkeri extrași"
-    if not settings.ANTHROPIC_API_KEY:
-        msg += " (Anthropic API key lipsă — extragere LLM dezactivată)"
+    has_key = (settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY) or \
+              (settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY)
+    if not has_key:
+        msg += f" ({settings.LLM_PROVIDER} API key lipsă — extragere LLM dezactivată)"
     if out_of_range:
         msg += f", {out_of_range} în afara referinței"
 

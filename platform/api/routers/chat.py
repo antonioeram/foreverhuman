@@ -125,6 +125,51 @@ async def _save_message(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+def _check_llm_available() -> None:
+    """Aruncă 503 dacă niciun LLM provider nu e configurat."""
+    if settings.LLM_PROVIDER == "gemini" and settings.GEMINI_API_KEY:
+        return
+    if settings.LLM_PROVIDER == "anthropic" and settings.ANTHROPIC_API_KEY:
+        return
+    raise HTTPException(
+        status_code=503,
+        detail=f"{settings.LLM_PROVIDER.upper()}_API_KEY lipsă — chat dezactivat",
+    )
+
+
+async def _call_llm(system: str, history: list[dict], user_message: str) -> str:
+    """Apel LLM unificat: Gemini sau Anthropic, în funcție de LLM_PROVIDER."""
+    if settings.LLM_PROVIDER == "gemini":
+        import google.generativeai as genai
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name=settings.GEMINI_MODEL,
+            system_instruction=system,
+        )
+        # Convertim history din format Anthropic în format Gemini
+        # Gemini: role "user"/"model", parts=[text]
+        gemini_history = []
+        for m in history:
+            role = "model" if m["role"] == "assistant" else "user"
+            gemini_history.append({"role": role, "parts": [m["content"]]})
+
+        chat = model.start_chat(history=gemini_history)
+        resp = chat.send_message(user_message)
+        return resp.text.strip()
+
+    else:
+        import anthropic
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        messages = history + [{"role": "user", "content": user_message}]
+        resp = client.messages.create(
+            model=settings.ANTHROPIC_MODEL,
+            max_tokens=1024,
+            system=system,
+            messages=messages,
+        )
+        return resp.content[0].text.strip()
+
+
 @router.post("/{patient_id}/message", response_model=ChatResponse)
 async def send_message(
     patient_id: UUID,
@@ -136,59 +181,34 @@ async def send_message(
     Trimite un mesaj agentului pacientului.
     - Construiește context din biomarkeri reali
     - Istoricul conversației din audit_log
-    - Răspuns Anthropic cu anti-halucinare
+    - Răspuns LLM (Gemini sau Anthropic) cu anti-halucinare
     """
-    if not settings.ANTHROPIC_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="ANTHROPIC_API_KEY lipsă — chat dezactivat",
-        )
+    _check_llm_available()
 
     p = await _get_patient_or_404(db, str(patient_id), current_user["clinic_id"])
     schema = p.schema_name
 
     session_id = body.session_id or str(uuid4())
-
-    # Context pacient
     context = await _get_patient_context(db, schema)
-
-    # Istoric conversație
     history = await _get_chat_history(db, schema, session_id)
 
-    # Construiește mesajele pentru Anthropic
-    messages = history + [{"role": "user", "content": body.message}]
+    system_with_context = (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"=== DATE PACIENT ===\n{context}\n"
+        f"=== SESIUNE: {session_id} ==="
+    )
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-        system_with_context = (
-            f"{SYSTEM_PROMPT}\n\n"
-            f"=== DATE PACIENT ===\n{context}\n"
-            f"=== SESIUNE: {session_id} ==="
-        )
-
-        response = client.messages.create(
-            model=settings.ANTHROPIC_MODEL,
-            max_tokens=1024,
-            system=system_with_context,
-            messages=messages,
-        )
-
-        answer = response.content[0].text.strip()
-
+        answer = await _call_llm(system_with_context, history, body.message)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Eroare Anthropic: {e}")
+        raise HTTPException(status_code=502, detail=f"Eroare LLM ({settings.LLM_PROVIDER}): {e}")
 
-    # Salvează mesajele
     await _save_message(db, schema, session_id, "user", body.message)
     await _save_message(db, schema, session_id, "assistant", answer)
 
-    return ChatResponse(
-        response=answer,
-        session_id=session_id,
-        sources=[],
-    )
+    return ChatResponse(response=answer, session_id=session_id, sources=[])
 
 
 @router.post("/{patient_id}/message/stream")
@@ -200,13 +220,9 @@ async def send_message_stream(
 ):
     """
     Streaming SSE — răspunsul vine token cu token.
-    Preferat pentru UX în mobile app.
+    Gemini streaming sau Anthropic streaming, în funcție de LLM_PROVIDER.
     """
-    if not settings.ANTHROPIC_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="ANTHROPIC_API_KEY lipsă — chat dezactivat",
-        )
+    _check_llm_available()
 
     p = await _get_patient_or_404(db, str(patient_id), current_user["clinic_id"])
     schema = p.schema_name
@@ -214,7 +230,6 @@ async def send_message_stream(
     session_id = body.session_id or str(uuid4())
     context = await _get_patient_context(db, schema)
     history = await _get_chat_history(db, schema, session_id)
-    messages = history + [{"role": "user", "content": body.message}]
 
     system_with_context = (
         f"{SYSTEM_PROMPT}\n\n"
@@ -222,36 +237,47 @@ async def send_message_stream(
         f"=== SESIUNE: {session_id} ==="
     )
 
-    # Salvăm mesajul user înainte de stream
     await _save_message(db, schema, session_id, "user", body.message)
 
     async def event_generator() -> AsyncIterator[str]:
-        full_response = []
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            if settings.LLM_PROVIDER == "gemini":
+                import google.generativeai as genai
+                genai.configure(api_key=settings.GEMINI_API_KEY)
+                model = genai.GenerativeModel(
+                    model_name=settings.GEMINI_MODEL,
+                    system_instruction=system_with_context,
+                )
+                gemini_history = []
+                for m in history:
+                    role = "model" if m["role"] == "assistant" else "user"
+                    gemini_history.append({"role": role, "parts": [m["content"]]})
+                chat = model.start_chat(history=gemini_history)
+                resp = chat.send_message(body.message, stream=True)
+                for chunk in resp:
+                    if chunk.text:
+                        payload = json.dumps({"token": chunk.text, "session_id": session_id})
+                        yield f"data: {payload}\n\n"
 
-            with client.messages.stream(
-                model=settings.ANTHROPIC_MODEL,
-                max_tokens=1024,
-                system=system_with_context,
-                messages=messages,
-            ) as stream:
-                for text_chunk in stream.text_stream:
-                    full_response.append(text_chunk)
-                    payload = json.dumps({"token": text_chunk, "session_id": session_id})
-                    yield f"data: {payload}\n\n"
+            else:  # anthropic
+                import anthropic
+                client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                messages = history + [{"role": "user", "content": body.message}]
+                with client.messages.stream(
+                    model=settings.ANTHROPIC_MODEL,
+                    max_tokens=1024,
+                    system=system_with_context,
+                    messages=messages,
+                ) as stream:
+                    for text_chunk in stream.text_stream:
+                        payload = json.dumps({"token": text_chunk, "session_id": session_id})
+                        yield f"data: {payload}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             return
 
-        # Salvăm răspunsul complet
-        if full_response:
-            complete = "".join(full_response)
-            # Fire-and-forget save — nu putem await într-un generator sync
-            # Salvarea se face în endpoint non-stream sau prin background task
-            yield f"data: {json.dumps({'done': True, 'session_id': session_id})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'session_id': session_id})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
